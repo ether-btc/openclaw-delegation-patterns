@@ -173,3 +173,94 @@ Before marking any task complete:
 - [delegation-fundamentals.md](delegation-fundamentals.md) - Core concepts
 - [subagent-handoff-protocol.md](subagent-handoff-protocol.md) - Handoff
 - [templates/delegation-prompt.md](templates/delegation-prompt.md) - Spawn template
+
+---
+
+## Lessons from Production Use (2026-03-18)
+
+### Memory System Fix Project
+
+Today we successfully fixed a critical memory system issue using orchestrator-led delegation. Key observations:
+
+#### What Worked
+
+1. **Orchestrator-Led Pattern**
+   - Main agent handled all file operations
+   - Subagents focused on reasoning/generating output
+   - Results written to progress files
+   - Single source of truth maintained
+
+2. **Atomic Task Design**
+   - Each subagent had one clear objective
+   - Progress files tracked state reliably
+   - Timeout handling worked (when tasks took too long, we verified manually)
+
+3. **Verification Discipline**
+   - Never trust "complete" without verification
+   - Check file existence, content
+   - Test functionality after subagent returns
+
+#### What We Learned
+
+1. **Subagent Timeouts**
+   - Some tasks timed out at 3 minutes
+   - Progress file not always written
+   - Manual verification needed
+
+2. **Model Selection Matters**
+   - `qwen3-coder` for implementation tasks
+   - `kimik2thinking` for analysis
+   - Different models behave differently with same prompts
+
+3. **Verification is Mandatory**
+   - Check output files exist
+   - Test functionality independently
+   - Trust but verify
+
+#### Anti-Patterns to Avoid
+
+| Anti-Pattern | Problem | Solution |
+|--------------|--------|----------|
+| Trust "complete" | Tasks reported done but no output | Always verify |
+| No progress file | Lost track of task state | Require progress.md |
+| Poll for completion | Wastes resources | Trust push-based completion |
+| Skip timeout management | Tasks hang forever | Set appropriate timeouts |
+
+#### Code Example: Orchestrator-Led
+
+```javascript
+// Main agent (orchestrator)
+await sessions_spawn({
+  task: "Fix memory search",
+  timeoutSeconds: 180
+});
+
+// Wait for completion event
+// Then verify:
+const output = readFile(progressFile);
+if (!output.includes("COMPLETE")) {
+  // Redelegate or handle failure
+}
+```
+
+#### Progress File Schema
+
+```markdown
+# Task: [Name]
+## Status
+- State: RUNNING | COMPLETED | FAILED
+- Updated: ISO8601
+
+## Progress
+- Phase: "[phase]"
+- Completed: N
+- Total: M
+
+## Last Activity
+- Time: ISO8601
+- Step: "[what was done]"
+```
+
+---
+
+*Added: 2026-03-18 from PROJECT-MEMORY-SYSTEM-FIX*
