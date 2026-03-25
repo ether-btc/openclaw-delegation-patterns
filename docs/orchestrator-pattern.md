@@ -71,18 +71,20 @@ Write code to implement login. Use the write tool to create auth.py.
 Write the code for a login implementation. I'll create the file with your code.
 ```
 
-### 2. No Progress File Updates by Subagent
+### 2. Subagent Output Convention
 
-Subagents report findings; orchestrator updates tracking.
+Subagents write results to result sink; orchestrator extracts and writes deliverables.
 
 **❌ Wrong:**
 ```
-Remember to update progress.md when done.
+Report your findings back to me. I'll handle the progress tracking.
+(Subagent produces text, orchestrator writes everything to disk)
 ```
 
 **✅ Correct:**
 ```
-Report your findings back to me. I'll handle the progress tracking.
+Write incremental results to results/sink.jsonl using the result-sink script.
+Report findings in your response. I'll extract and write the final deliverables.
 ```
 
 ### 3. Push-Based, Not Polling

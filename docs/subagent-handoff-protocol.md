@@ -6,6 +6,21 @@ File-based progress tracking and state machine for reliable subagent completion.
 
 This protocol enables structured progress reporting and reliable completion detection for subagents. It uses a simple file-based approach that works across different model implementations.
 
+## Result-Sink Convention (MANDATORY)
+
+**Every subagent must write results to a result sink file.** This survives compaction and session death:
+
+```bash
+bash $WORKSPACE/scripts/subagent-result-sink.sh \
+    --phase "phase-name" \
+    --status "complete" \
+    --content "findings..."
+```
+
+Mark final output with `--status "final"`. The orchestrator reads the sink after completion.
+
+**Progress vs Deliverables:** Subagents writing progress/checkpoint state is fine — this is state tracking, not file operations on behalf of the orchestrator. The prohibition is on subagents writing DELIVERABLES (final reports, code files, etc.) to disk. Those must be extracted by the orchestrator from the result sink.
+
 ## How It Works
 
 ### For Main Agent

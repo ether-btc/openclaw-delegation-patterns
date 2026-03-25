@@ -22,11 +22,15 @@ This repository documents battle-tested patterns for delegating work to subagent
 
 | Task Type | Model | Invocation |
 |-----------|-------|------------|
-| Quick summary | minimax-m2.5:free | `model: kilocode/minimax/minimax-m2.5:free` |
+| Quick tasks | minimax/MiniMax-M2.7 | `model: minimax/MiniMax-M2.7` |
 | Fast reasoning | glm-4.7 | `model: zai/glm-4.7` |
-| Coding | qwen3-coder | `agentId: qwen3-coder` |
-| Analysis | kimik2thinking | `agentId: kimik2thinking` |
-| Heavy reasoning | deepseek-reasoner | `agentId: deepseek-reasoner` |
+| Coding | qwen3-coder | `model: qwen3-coder` |
+| Deep analysis | kimik2thinking | `model: nvidia/moonshotai/kimi-k2-thinking` |
+| General reasoning | kimi-k2.5 | `model: nvidia/moonshotai/kimi-k2.5` |
+| Fast alt | gemini-2.5-flash-lite | `model: google/gemini-2.5-flash-lite` |
+| Heavy reasoning | deepseek32 | `model: nvidia/deepseek-ai/deepseek-v3.2` |
+
+> **Note:** Always use `model:` parameter (not `agentId:`) for sessions_spawn. Use model aliases where available.
 
 ### 2. Follow the Checklist
 

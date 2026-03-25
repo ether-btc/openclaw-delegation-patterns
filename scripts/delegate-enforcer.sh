@@ -1,12 +1,12 @@
 #!/bin/bash
 #
 # Delegate Enforcer Script
-# Validates and routes delegation to appropriate model/agent
+# Validates and routes delegation to appropriate model
 #
 # Usage: ./delegate-enforcer.sh <task-description> <model-type>
 #
 # Exit codes:
-#   0 - Success
+#   0 - Success (model written to stdout)
 #   1 - Invalid input/error
 #
 
@@ -18,11 +18,13 @@ if [ $# -lt 2 ]; then
     echo "Usage: $0 <task-description> <model-type>" >&2
     echo "" >&2
     echo "Valid model types:" >&2
-    echo "  coding           → agentId: qwen3-coder" >&2
-    echo "  reasoning        → agentId: kimik2thinking" >&2
-    echo "  quick            → model: kilocode/minimax/minimax-m2.5:free" >&2
+    echo "  coding           → model: qwen3-coder" >&2
+    echo "  reasoning        → model: nvidia/moonshotai/kimi-k2-thinking" >&2
+    echo "  general          → model: nvidia/moonshotai/kimi-k2.5" >&2
+    echo "  quick            → model: minimax/MiniMax-M2.7" >&2
     echo "  fast-reasoning   → model: zai/glm-4.7" >&2
-    echo "  heavy-reasoning  → agentId: deepseek-reasoner" >&2
+    echo "  heavy-reasoning  → model: nvidia/deepseek-ai/deepseek-v3.2" >&2
+    echo "  fast-alt         → model: google/gemini-2.5-flash-lite" >&2
     exit 1
 fi
 
@@ -38,34 +40,37 @@ fi
 # Model selection logic based on type
 case "$MODEL_TYPE" in
     coding)
-        AGENT_ID="qwen3-coder"
-        echo "agentId: $AGENT_ID"
+        echo "model: qwen3-coder"
         ;;
     reasoning)
-        AGENT_ID="kimik2thinking"
-        echo "agentId: $AGENT_ID"
+        echo "model: nvidia/moonshotai/kimi-k2-thinking"
+        ;;
+    general)
+        echo "model: nvidia/moonshotai/kimi-k2.5"
         ;;
     quick)
-        MODEL="kilocode/minimax/minimax-m2.5:free"
-        echo "model: $MODEL"
+        echo "model: minimax/MiniMax-M2.7"
         ;;
     fast-reasoning)
-        MODEL="zai/glm-4.7"
-        echo "model: $MODEL"
+        echo "model: zai/glm-4.7"
         ;;
     heavy-reasoning)
-        AGENT_ID="deepseek-reasoner"
-        echo "agentId: $AGENT_ID"
+        echo "model: nvidia/deepseek-ai/deepseek-v3.2"
+        ;;
+    fast-alt)
+        echo "model: google/gemini-2.5-flash-lite"
         ;;
     *)
         echo "Error: Invalid model type: $MODEL_TYPE" >&2
         echo "" >&2
         echo "Valid model types:" >&2
-        echo "  coding           → agentId: qwen3-coder" >&2
-        echo "  reasoning        → agentId: kimik2thinking" >&2
-        echo "  quick            → model: kilocode/minimax/minimax-m2.5:free" >&2
+        echo "  coding           → model: qwen3-coder" >&2
+        echo "  reasoning        → model: nvidia/moonshotai/kimi-k2-thinking" >&2
+        echo "  general          → model: nvidia/moonshotai/kimi-k2.5" >&2
+        echo "  quick            → model: minimax/MiniMax-M2.7" >&2
         echo "  fast-reasoning   → model: zai/glm-4.7" >&2
-        echo "  heavy-reasoning  → agentId: deepseek-reasoner" >&2
+        echo "  heavy-reasoning  → model: nvidia/deepseek-ai/deepseek-v3.2" >&2
+        echo "  fast-alt         → model: google/gemini-2.5-flash-lite" >&2
         exit 1
         ;;
 esac

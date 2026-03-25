@@ -23,14 +23,37 @@ Core concepts for effective delegation in OpenClaw.
 
 ## Delegation Matrix
 
-| Role | Model | Invocation | Best For |
-|------|-------|------------|----------|
-| Coding | qwen3-coder | `agentId: qwen3-coder` | Implementation, refactoring |
-| Reasoning | kimik2thinking | `agentId: kimik2thinking` | Analysis, debugging |
-| Fast | minimax-m2.5:free | `model: kilocode/minimax/minimax-m2.5:free` | Quick tasks |
-| Fast Reasoning | glm-4.7 | `model: zai/glm-4.7` | Quick analysis |
-| Heavy Reasoning | deepseek-reasoner | `agentId: deepseek-reasoner` | Chain-of-thought |
-| Premium | gpt-5.2 | blockrun | Critical tasks |
+| Role | Model | Alias | Best For |
+|------|-------|-------|----------|
+| Coding | `nvidia/qwen/qwen3-coder-480b-a35b-instruct` | `qwen3-coder` | Implementation, refactoring |
+| Deep reasoning | `nvidia/moonshotai/kimi-k2-thinking` | `kimik2thinking` | Analysis, debugging, planning |
+| General reasoning | `nvidia/moonshotai/kimi-k2.5` | `kimik25` | Reasoning, analysis |
+| Quick tasks | `minimax/MiniMax-M2.7` | `minimax` | Fast, lightweight tasks |
+| Fast reasoning | `zai/glm-4.7` | `GLM` | Quick analysis (check if exhausted) |
+| Heavy reasoning | `nvidia/deepseek-ai/deepseek-v3.2` | `deepseek32` | Chain-of-thought |
+| Fast alt | `google/gemini-2.5-flash-lite` | — | Quick tasks, large context |
+
+> **Important:** Always use `model:` parameter in sessions_spawn. Use aliases over full IDs.
+
+## Result-Sink Convention (MANDATORY)
+
+Every subagent MUST write results to a result sink file. This survives compaction and session death:
+
+```bash
+# At phase completion:
+bash $WORKSPACE/scripts/subagent-result-sink.sh \
+    --phase "research" \
+    --status "complete" \
+    --content "findings..."
+
+# At final completion:
+bash $WORKSPACE/scripts/subagent-result-sink.sh \
+    --phase "final" \
+    --status "final" \
+    --content "final output..."
+```
+
+The orchestrator reads `results/sink.jsonl` after the subagent completes.
 
 ## Atomic Task Design
 
@@ -45,11 +68,11 @@ Core concepts for effective delegation in OpenClaw.
 
 | Size | Example | Model | Timeout |
 |------|---------|-------|---------|
-| Micro | Summarize 1 file | minimax-m2.5:free | 30s |
-| Small | Fix 1 bug | qwen3-coder | 60s |
-| Medium | Refactor 1 module | qwen3-coder | 180s |
-| Large | Implement feature | qwen3-coder | 300s |
-| Complex | Design system | deepseek-reasoner | 600s |
+| Micro | Summarize 1 file | `qwen35` | 30s |
+| Small | Fix 1 bug | `qwen3-coder` | 60s |
+| Medium | Refactor 1 module | `qwen3-coder` | 180s |
+| Large | Implement feature | `qwen3-coder` | 300s |
+| Complex | Design system | `kimik2thinking` | 600s |
 
 ### ❌ Bad Task Definitions
 
@@ -67,28 +90,20 @@ Core concepts for effective delegation in OpenClaw.
 
 Before spawning any subagent, verify:
 
-- [ ] Task fits one of the 6 delegation roles
+- [ ] Task fits one of the delegation roles
 - [ ] Correct model selected from delegation matrix
-- [ ] Progress file exists for tracking
+- [ ] Progress file created for tracking
 - [ ] Task is atomic (single, well-defined objective)
 - [ ] Success criteria defined
 - [ ] Timeout appropriate for task complexity
 - [ ] Git operations use safe patterns
-
-## Context Transfer
-
-When delegating, provide:
-1. **Task description**: What needs to be done
-2. **Expected output**: Where results go
-3. **Success criteria**: How to measure completion
-4. **Relevant context**: Files, links, prior work
 
 ## Main Agent Responsibilities
 
 1. **Spawn**: Create subagent with proper context
 2. **Monitor**: Check progress file for updates
 3. **Detect issues**: Identify stalled or failed tasks
-4. **Receive results**: Collect output from subagent
+4. **Receive results**: Collect output from subagent (via result sink)
 5. **Verify**: Confirm output meets success criteria
 6. **Cleanup**: Remove progress files when done
 
@@ -96,18 +111,18 @@ When delegating, provide:
 
 1. **Understand**: Read task description and context
 2. **Track**: Update progress file every 2 minutes
-3. **Execute**: Complete the assigned task
-4. **Report**: Write output to designated location
-5. **Signal completion**: Update progress to complete
+3. **Sink results**: Write incremental results to `results/sink.jsonl`
+4. **Execute**: Complete the assigned task
+5. **Signal completion**: Mark final result with `--status "final"`
 
 ## Common Pitfalls
 
 | Pitfall | Solution |
 |---------|----------|
-| Over-del | Keepegating simple tasks in-house |
+| Over-delegating | Keep simple tasks in-house |
 | Under-delegating | Automate repetitive tasks |
 | Vague tasks | Define atomic objectives |
-| No tracking | Always use progress files |
+| No tracking | Always use progress files + result sink |
 | Missing success criteria | Define before delegating |
 
 ---
