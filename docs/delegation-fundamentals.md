@@ -27,10 +27,10 @@ Core concepts for effective delegation in OpenClaw.
 |------|-------|------------|----------|
 | Coding | qwen3-coder | `agentId: qwen3-coder` | Implementation, refactoring |
 | Reasoning | kimik2thinking | `agentId: kimik2thinking` | Analysis, debugging |
-| Fast | minimax-m2.5:free | `model: kilocode/minimax/minimax-m2.5:free` | Quick tasks |
+| Fast | minimax/MiniMax-M2.7 | `model: minimax/MiniMax-M2.7` | Quick tasks |
 | Fast Reasoning | glm-4.7 | `model: zai/glm-4.7` | Quick analysis |
-| Heavy Reasoning | deepseek-reasoner | `agentId: deepseek-reasoner` | Chain-of-thought |
-| Premium | gpt-5.2 | blockrun | Critical tasks |
+| Heavy Reasoning | nvidia/deepseek-ai/deepseek-v3.2 | `agentId: nvidia/deepseek-ai/deepseek-v3.2` | Chain-of-thought |
+| Premium | 
 
 ## Atomic Task Design
 
@@ -45,11 +45,11 @@ Core concepts for effective delegation in OpenClaw.
 
 | Size | Example | Model | Timeout |
 |------|---------|-------|---------|
-| Micro | Summarize 1 file | minimax-m2.5:free | 30s |
+| Micro | Summarize 1 file | minimax/MiniMax-M2.7 | 30s |
 | Small | Fix 1 bug | qwen3-coder | 60s |
 | Medium | Refactor 1 module | qwen3-coder | 180s |
 | Large | Implement feature | qwen3-coder | 300s |
-| Complex | Design system | deepseek-reasoner | 600s |
+| Complex | Design system | nvidia/deepseek-ai/deepseek-v3.2 | 600s |
 
 ### ❌ Bad Task Definitions
 

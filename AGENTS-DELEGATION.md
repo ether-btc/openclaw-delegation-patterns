@@ -23,12 +23,12 @@ All delegation MUST follow:
 |-------------|--------|--------|--------|
 | Coding | `agentId: qwen3-coder` | Orchestrator-led | ✅ Works |
 | Reasoning | `agentId: kimik2thinking` | Orchestrator-led | ✅ Works |
-| Quick tasks | `model: kilocode/minimax/minimax-m2.5:free` | Orchestrator-led | ✅ Works |
+| Quick tasks | `model: minimax/MiniMax-M2.7` | Orchestrator-led | ✅ Works |
 | Fast reasoning | `model: zai/glm-4.7` | Orchestrator-led | ✅ Works |
 
 **Format Rule:**
-- ✅ `agentId:` → Agent wrapper (qwen3-coder, kimik2thinking, deepseek-reasoner)
-- ✅ `model:` → Provider-integrated (zai/glm-4.7, kilocode/minimax/minimax-m2.5:free)
+- ✅ `agentId:` → Agent wrapper (qwen3-coder, kimik2thinking, nvidia/deepseek-ai/deepseek-v3.2)
+- ✅ `model:` → Provider-integrated (zai/glm-4.7, minimax/MiniMax-M2.7)
 - ❌ NEVER use full model IDs like `nvidia/qwen/qwen3-coder-480b-a35b-instruct`
 
 ---

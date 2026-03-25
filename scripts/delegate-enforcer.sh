@@ -20,9 +20,9 @@ if [ $# -lt 2 ]; then
     echo "Valid model types:" >&2
     echo "  coding           → agentId: qwen3-coder" >&2
     echo "  reasoning        → agentId: kimik2thinking" >&2
-    echo "  quick            → model: kilocode/minimax/minimax-m2.5:free" >&2
+    echo "  quick            → model: minimax/MiniMax-M2.7" >&2
     echo "  fast-reasoning   → model: zai/glm-4.7" >&2
-    echo "  heavy-reasoning  → agentId: deepseek-reasoner" >&2
+    echo "  heavy-reasoning  → agentId: nvidia/deepseek-ai/deepseek-v3.2" >&2
     exit 1
 fi
 
@@ -46,7 +46,7 @@ case "$MODEL_TYPE" in
         echo "agentId: $AGENT_ID"
         ;;
     quick)
-        MODEL="kilocode/minimax/minimax-m2.5:free"
+        MODEL="minimax/MiniMax-M2.7"
         echo "model: $MODEL"
         ;;
     fast-reasoning)
@@ -54,7 +54,7 @@ case "$MODEL_TYPE" in
         echo "model: $MODEL"
         ;;
     heavy-reasoning)
-        AGENT_ID="deepseek-reasoner"
+        AGENT_ID="nvidia/deepseek-ai/deepseek-v3.2"
         echo "agentId: $AGENT_ID"
         ;;
     *)
@@ -63,9 +63,9 @@ case "$MODEL_TYPE" in
         echo "Valid model types:" >&2
         echo "  coding           → agentId: qwen3-coder" >&2
         echo "  reasoning        → agentId: kimik2thinking" >&2
-        echo "  quick            → model: kilocode/minimax/minimax-m2.5:free" >&2
+        echo "  quick            → model: minimax/MiniMax-M2.7" >&2
         echo "  fast-reasoning   → model: zai/glm-4.7" >&2
-        echo "  heavy-reasoning  → agentId: deepseek-reasoner" >&2
+        echo "  heavy-reasoning  → agentId: nvidia/deepseek-ai/deepseek-v3.2" >&2
         exit 1
         ;;
 esac

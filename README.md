@@ -22,11 +22,11 @@ This repository documents battle-tested patterns for delegating work to subagent
 
 | Task Type | Model | Invocation |
 |-----------|-------|------------|
-| Quick summary | minimax-m2.5:free | `model: kilocode/minimax/minimax-m2.5:free` |
+| Quick summary | minimax/MiniMax-M2.7 | `model: minimax/MiniMax-M2.7` |
 | Fast reasoning | glm-4.7 | `model: zai/glm-4.7` |
 | Coding | qwen3-coder | `agentId: qwen3-coder` |
 | Analysis | kimik2thinking | `agentId: kimik2thinking` |
-| Heavy reasoning | deepseek-reasoner | `agentId: deepseek-reasoner` |
+| Heavy reasoning | nvidia/deepseek-ai/deepseek-v3.2 | `agentId: nvidia/deepseek-ai/deepseek-v3.2` |
 
 ### 2. Follow the Checklist
 
