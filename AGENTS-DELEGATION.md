@@ -10,10 +10,13 @@ All delegation MUST follow:
 3. Clear separation: execution vs coordination
 4. Single source of truth for progress
 
-**NEVER progress-file approach** (subagents updating their own files):
-- Different models behave differently
-- Inconsistent results
-- No single source of truth
+**Progress-file nuance (not prohibited — structured correctly):**
+- ✅ Subagent writes **checkpoint state** (phase, progress %, current step) → orchestrator reads
+- ✅ Orchestrator is sole source of truth for **what gets committed** to memory
+- ❌ Subagent writes **final deliverables** directly → orchestrator must extract and own
+- ❌ Subagent updates shared memory files without orchestrator mediation
+
+The result-sink pattern: subagent appends to `results/sink.jsonl`, orchestrator reads and merges on completion.
 
 ---
 
@@ -43,3 +46,4 @@ All delegation MUST follow:
 
 *Updated: 2026-03-11*
 *This is MANDATORY. Violation = degraded reliability.*
+

@@ -19,8 +19,8 @@ This protocol enables structured progress reporting and reliable completion dete
 1. Read task and understand requirements
 2. Initialize progress file with: state=todo, progress=0%
 3. Update progress every 2 minutes with: state=in-progress, progress=X%
-4. Update completion status when done: state=complete, progress=100%
-5. Write final output to designated location
+4. Update checkpoint on phase completion: state=in-progress, progress=X%, current_phase="..."
+5. Append final results to result sink (`results/sink.jsonl`) — do NOT write final output files directly
 6. Update progress file to final state on exit
 
 ## Progress File Schema
@@ -54,13 +54,15 @@ todo → in-progress → paused → complete
 ### Main Agent → Subagent
 ```
 Task: [description]
-Expected Output: [path/to/output.md]
+Result Sink: [path/to/results/sink.jsonl]
 Progress File: [path/to/progress.json]
 ```
 
 ### Subagent → Main Agent
 ```
 Every 2 minutes: Update progress file
+On phase complete: Append to result sink
+On final: Mark progress complete + append "FINAL:" entry to result sink
 ```
 
 Progress update example:
@@ -73,14 +75,14 @@ Progress update example:
 }
 ```
 
-On completion:
+Result sink append (per phase):
 ```json
-{
-  "state": "complete",
-  "progress": 100,
-  "output_file": "path/to/output.md",
-  "last_updated": "2026-03-13T10:30:00Z"
-}
+{"phase": "research", "status": "complete", "content": "...", "written_at": "2026-03-13T10:00:00Z"}
+```
+
+On final completion:
+```json
+{"phase": "final", "status": "final", "content": "...final output...", "written_at": "2026-03-13T10:30:00Z"}
 ```
 
 ## Implementation
@@ -142,7 +144,7 @@ If subagent encounters error:
 Check progress file:
 - If state=failed → Error recovery flow
 - If state=stalled → Stalled recovery flow
-- If state=complete → Read output file
+- If state=complete → Read result sink (`results/sink.jsonl`) for final output; orchestrator owns what gets committed
 
 ## Stalled Recovery
 
@@ -155,19 +157,24 @@ Check progress file:
 
 ### Test Scenario: Simple File Read
 ```bash
-# Create progress tracking
-mkdir -p memory/projects/test/read-file
+# Create project structure
+mkdir -p memory/projects/test/read-file/results
 echo '{"task_id": "read-file", "state": "todo", "progress": 0}' > memory/projects/test/read-file/progress.json
+touch memory/projects/test/read-file/results/sink.jsonl
 
 # Spawn subagent
 # Task: Read example.txt and summarize
 # Progress file: memory/projects/test/read-file/progress.json
+# Result sink: memory/projects/test/read-file/results/sink.jsonl
 
 # Monitor progress
 while true; do
   cat memory/projects/test/read-file/progress.json
   sleep 10
 done
+
+# On completion, read result sink:
+cat memory/projects/test/read-file/results/sink.jsonl
 ```
 
 ## Integration
@@ -178,10 +185,30 @@ This protocol integrates with:
 - Project progress tracking
 - Failsafe testing framework
 
+## Result Sink Pattern
+
+The result sink is the authoritative output log. Subagent appends structured JSONL entries; orchestrator reads on completion.
+
+```bash
+# Subagent writes:
+bash $WORKSPACE/scripts/subagent-result-sink.sh \
+    --phase "research" \
+    --status "complete" \
+    --content "findings..."
+
+# Orchestrator reads:
+cat memory/projects/[project]/results/sink.jsonl
+```
+
+**Key rules:**
+- Subagent writes sink, orchestrator reads and merges — never reverse
+- Progress file is for state; result sink is for output
+- Orchestrator is sole authority on what gets committed to memory
+
 ## Notes
 
 - Lightweight progress tracking (no complex handoff requests)
-- Subagents manage their own progress
+- Subagents manage checkpoint state; orchestrator owns deliverables
 - Main agent monitors and detects issues
 - Compatible with OpenClaw architecture
 
