@@ -66,7 +66,7 @@ Keep the subagent prompt under 800 tokens. Include:
 ```
 ## Task: Audit <script-name>
 
-Working dir: /home/pi/.openclaw/workspace
+Working dir: `~/.openclaw/workspace`
 
 Step 1: read <script-path>
 Step 2: exec shellcheck <script-path>
