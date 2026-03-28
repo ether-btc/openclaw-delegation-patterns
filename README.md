@@ -1,85 +1,139 @@
 # OpenClaw Delegation Patterns
 
-Production-grade delegation and subagent handoff protocols for OpenClaw.
+Production-grade delegation and subagent handoff protocols for OpenClaw. Battle-tested across 115+ subagent sessions with measured failure rates.
 
 ## Overview
 
-This repository documents battle-tested patterns for delegating work to subagents in OpenClaw. It covers everything from when to delegate to atomic task design, progress tracking, and failsafe testing.
+This repository documents how to delegate work to subagents in OpenClaw reliably. It covers task decomposition, model selection, progress tracking, timeout handling, and post-completion verification.
+
+### Key Metrics (baseline, 2026-03-28)
+
+| Model | Sessions | Failure Rate |
+|-------|----------|-------------|
+| kimik2thinking | 16 | 0% |
+| qwen3-coder | 46 | 13% |
+| MiniMax-M2.7 | 16 | 0% |
+| **Overall** | **107** | **8.4%** |
+
+Target: <5% failure rate through chunking and model-matching.
 
 ## Philosophy
 
-**Orchestrator-Led Pattern**: The main agent handles all file operations while subagents focus on reasoning and generating output. Subagents report back to the main agent, who updates files and communicates results to the user.
+**Orchestrator Pattern**: One agent sees everything and routes work to specialists. The orchestrator writes files; subagents produce output. Not a democracy — one brain, multiple hands.
 
 **Core Principles**:
-- Atomic tasks: One subagent run, one well-defined objective
-- Progress tracking: File-based state machine for reliability
-- Failsafe first: Backup → verify → change → verify → rollback if needed
-- Token budgeting: Select models based on task complexity
+- **Bypass rule:** ≤3 tool calls → orchestrator handles directly (no delegation overhead)
+- **Chunking:** Every subagent gets ≤5 tool calls, ≤3 files to read, one output artifact
+- **Result sink:** Subagents write to `results/<project>/` only — orchestrator copies to workspace
+- **Verify before trust:** Check `results/` before assuming subagent failed (compaction kills delivery)
+
+## Model Selection Matrix
+
+| Role | Model Alias | Full Model ID | Use For |
+|------|------------|---------------|---------|
+| Coding | qwen3-coder | `nvidia/qwen/qwen3-coder-480b-a35b-instruct` | Code generation ONLY (never reviews) |
+| Strategic Analyst | GLM51 | `zai/glm-5.1` | Code review, architecture, synthesis |
+| Deep Research | kimik2thinking | `nvidia/moonshotai/kimi-k2-thinking` | Multi-file analysis, Staff Engineer reviews |
+| Fast Reasoning | deepseek32 | `nvidia/deepseek-ai/deepseek-v3.2` | Quick lookups, parallel sweeps |
+| General Analysis | qwen35 | `nvidia/qwen/qwen3.5-397b-a17b` | Document review, summaries |
+
+**Rule:** qwen3-coder for code generation ONLY. Never assign reviews — 13% failure rate on multi-file analysis tasks.
 
 ## Quick Start
 
-### 1. Choose Your Model
+### 1. Survey → Decide → Chunk → Delegate
 
-| Task Type | Model | Invocation |
-|-----------|-------|------------|
-| Quick summary | minimax/MiniMax-M2.7 | `model: minimax/MiniMax-M2.7` |
-| Fast reasoning | glm-4.7 | `model: zai/glm-4.7` |
-| Coding | qwen3-coder | `agentId: qwen3-coder` |
-| Analysis | kimik2thinking | `agentId: kimik2thinking` |
-| Heavy reasoning | nvidia/deepseek-ai/deepseek-v3.2 | `agentId: nvidia/deepseek-ai/deepseek-v3.2` |
+Before any delegation:
+1. **Survey** the terrain (how many files? what complexity?)
+2. **Decide** — can I do this directly? (bypass if ≤3 tool calls)
+3. **Chunk** — split into atomic tasks (≤5 calls, ≤3 files each)
+4. **Delegate** — assign to right model with result-sink constraint
 
-### 2. Follow the Checklist
+### 2. Pre-Delegation Checklist
 
-Before delegating:
-- [ ] Task fits a delegation role
-- [ ] Model selected correctly
-- [ ] Task is atomic (single objective)
-- [ ] Success criteria defined
-- [ ] Timeout set appropriately
+Run `scripts/pre-delegation-checklist.sh` before every delegation. It enforces:
+- Task is atomic and well-defined
+- Model selected correctly
+- Result-sink constraint in task prompt
+- Checkpoint created for multi-phase work
 
-### 3. Use Progress Tracking
+### 3. Post-Completion Verification
 
-Every subagent task should have a progress file:
-```json
-{
-  "task_id": "example-task",
-  "state": "in-progress",
-  "progress": 50,
-  "last_updated": "2026-03-13T10:00:00Z"
-}
-```
+After subagent reports done:
+1. Check `results/<project>/` — compaction may have killed delivery
+2. Verify output quality
+3. Copy results to workspace (orchestrator writes)
+4. Run `scripts/orchestrator-verify.sh`
 
-## Documentation
+## Protocols
 
-- [Delegation Fundamentals](docs/delegation-fundamentals.md) - Core concepts and when to delegate
-- [Subagent Handoff Protocol](docs/subagent-handoff-protocol.md) - File-based progress tracking
-- [Delegation Enforcement](docs/delegation-enforcement.md) - Pre-delegation checklists
-- [Failsafe Testing](docs/failsafe-testing.md) - Backup/verify/rollback patterns
-- [Quota Management](docs/quota-management.md) - Token budgeting and model selection
-- [Orchestrator Pattern](docs/orchestrator-pattern.md) - Main agent handles files
+| Protocol | Purpose |
+|----------|---------|
+| [DELEGATION_CORE](protocols/DELEGATION_CORE.md) | Timeouts, error classification, fallback models, rollback |
+| [CHUNKING](protocols/CHUNKING.md) | Task decomposition rules, hard limits, anti-patterns |
+| [SCOPING-BEFORE-DELEGATION](protocols/SCOPING-BEFORE-DELEGATION.md) | Survey → Decide → Chunk → Delegate sequence |
+| [ORCHESTRATOR_VERIFY](protocols/ORCHESTRATOR_VERIFY.md) | Post-completion verification (mandatory) |
+| [HANDOFF_PROTOCOL](protocols/HANDOFF_PROTOCOL.md) | Progress tracking, state machine, stalled recovery |
+| [PERSONA_SYNC](protocols/PERSONA_SYNC.md) | Model aliases, persona assignments, sync rules |
+| [DELEGATION_SURVIVAL](protocols/DELEGATION-SURVIVAL.md) | Post-reset subagent recovery, streaming glitch handling |
+| [Subagent Delegation](protocols/subagent-delegation-protocol.md) | qwen3-coder specific rules, context management |
 
 ## Templates
 
-- [Delegation Prompt](templates/delegation-prompt.md) - Template for spawning subagents
-- [Progress Tracking Schema](templates/progress-tracking-schema.md) - JSON schema for progress files
-
-## Examples
-
-- [Coding Delegation](examples/coding-delegation.md) - Real-world coding scenario
-- [Research Delegation](examples/research-delegation.md) - Research delegation scenario
+| Template | Use When |
+|----------|----------|
+| [Result Sink Task](templates/subagent-task-with-result-sink.md) | Default — subagent writes to results/ only |
+| [Progress Task](templates/subagent-task-with-progress.md) | Multi-phase tasks with checkpoint tracking |
+| [Research](templates/subagent-research.md) | Fact-finding, comparisons, pattern analysis |
+| [Code Analysis](templates/subagent-code-analysis.md) | Code review, architecture assessment |
+| [Compaction Audit](templates/subagent-compaction-audit.md) | Pre-delegation compactness checks |
 
 ## Scripts
 
-- [delegate-enforcer.sh](scripts/delegate-enforcer.sh) - Automatic model selection
+| Script | Lines | Purpose |
+|--------|-------|---------|
+| `delegate-with-checkpoint.sh` | 299 | Canonical spawn path with auto-recall + checkpoint |
+| `pre-delegation-checklist.sh` | 191 | 7-check gate (blocking on failure) |
+| `timeout-recovery.sh` | 330 | Timeout escalation + auto-verify |
+| `verify-handoff.sh` | 113 | Post-completion file verification |
+| `orchestrator-verify.sh` | 122 | Result extraction + workspace copy |
+| `measure-failure-rate.sh` | 163 | Subagent failure rate metrics |
+| `select-model.sh` | 142 | Weighted model router |
+| `compactness-score.sh` | 172 | Task complexity scoring |
+| `patrol-check.sh` | 148 | Zombie/stuck subagent detection |
 
-## Related Resources
+## Timeout Guidelines
 
-This project complements [openclaw-runbook](https://github.com/ether-btc/openclaw-runbook), which covers operational procedures and deployment patterns.
+| Task Type | Default | Max |
+|-----------|---------|-----|
+| Quick (≤3 tool calls) | 30s | 60s |
+| Code (<50 lines) | 60s | 120s |
+| Code (50-200 lines) | 180s | 300s |
+| Script build + test | 300s | 480s |
+| Analysis / research | 180s | 300s |
+
+**Escalation:** First timeout → 2× retry. Second timeout → orchestrator takes over directly.
+
+## Hard Limits (Never Exceed)
+
+| Limit | Value |
+|-------|-------|
+| Tool calls per chunk | ≤5 |
+| Files read per chunk | ≤3 |
+| File writes per chunk | ≤1 |
+| Code lines per chunk | ≤200 |
+| Chunk timeout | ≤300s (480s for script-build only) |
+| Parallel subagents | ≤4 per wave |
 
 ## Community
 
-Built by the OpenClaw community. Contributions welcome—see CONTRIBUTING.md for details.
+Built by the OpenClaw community. Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+## Related Projects
+
+- [openclaw-runbook](https://github.com/ether-btc/openclaw-runbook) — Operational procedures and deployment patterns
+- [openclaw-correlation-plugin](https://github.com/ether-btc/openclaw-correlation-plugin) — Memory correlation rules for OpenClaw
 
 ## License
 
-MIT License - See LICENSE file for details.
+MIT License — See LICENSE file for details.
