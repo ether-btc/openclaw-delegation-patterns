@@ -27,6 +27,7 @@ These are the ONLY valid model identifiers across all protocols and personas:
 | Deep Research | `memory/personas/kimik2thinking.md` | kimik2thinking | Multi-file analysis, Staff Engineer reviews |
 | Fast Reasoning | `memory/personas/deepseek32.md` | deepseek32 | Quick analysis, parallel sweeps |
 | General Analysis | `memory/personas/premium-mind.md` | qwen35 | Document review, summaries |
+| High-Speed Fallback | — | `minimax/MiniMax-M2.7` | Automatic fallback when primary exhausted |
 
 ---
 

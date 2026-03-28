@@ -29,6 +29,17 @@ When referencing models, use canonical aliases from PERSONA_SYNC.md:
 - `kimik2thinking` (not "kimi-k2-thinking")
 - `deepseek32` (not "deepseek-v3.2")
 
+## Template Variables
+
+Templates use `{{VARIABLE}}` syntax. Substitution is handled by `delegate-with-checkpoint.sh`:
+- `{{TASK_NAME}}` — descriptive task name
+- `{{PROJECT_NAME}}` — project identifier (used for results/ path)
+- `{{CREATED_AT}}` — ISO8601 timestamp
+- `{{TIMEOUT_SECONDS}}` — timeout in seconds
+- `{{CWD}}` — working directory
+
+To use manually: `sed -e "s/{{PROJECT_NAME}}/my-project/g" templates/subagent-task-with-result-sink.md`
+
 ## Filing Issues
 
 When reporting delegation failures, include:

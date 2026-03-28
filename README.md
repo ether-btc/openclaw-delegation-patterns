@@ -75,7 +75,7 @@ After subagent reports done:
 | [ORCHESTRATOR_VERIFY](protocols/ORCHESTRATOR_VERIFY.md) | Post-completion verification (mandatory) |
 | [HANDOFF_PROTOCOL](protocols/HANDOFF_PROTOCOL.md) | Progress tracking, state machine, stalled recovery |
 | [PERSONA_SYNC](protocols/PERSONA_SYNC.md) | Model aliases, persona assignments, sync rules |
-| [DELEGATION_SURVIVAL](protocols/DELEGATION-SURVIVAL.md) | Post-reset subagent recovery, streaming glitch handling |
+| [DELEGATION-SURVIVAL](protocols/DELEGATION-SURVIVAL.md) | Post-reset subagent recovery, streaming glitch handling |
 | [Subagent Delegation](protocols/subagent-delegation-protocol.md) | qwen3-coder specific rules, context management |
 
 ## Templates
@@ -106,7 +106,8 @@ After subagent reports done:
 
 | Task Type | Default | Max |
 |-----------|---------|-----|
-| Quick (≤3 tool calls) | 30s | 60s |
+| Quick (single tool call) | 30s | 60s |
+| Fact lookup / simple read | 60s | 120s |
 | Code (<50 lines) | 60s | 120s |
 | Code (50-200 lines) | 180s | 300s |
 | Script build + test | 300s | 480s |
