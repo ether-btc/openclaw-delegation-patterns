@@ -24,7 +24,7 @@ ALERT_MODE=false
 PATROL_LOG="$HOME/.openclaw/workspace/memory/patrol-log.json"
 STUCK_THRESHOLD_MIN=15
 ZOMBIE_THRESHOLD_MIN=30
-# AGENTMAIL_READY removed (was unused — patrol-check does not send email directly)
+RPI3B_HEALTH_SCRIPT="$HOME/.openclaw/workspace/scripts/check-rpi3b-health.sh"
 
 # ── Args ──────────────────────────────────────────────────────────────────────
 for arg in "$@"; do
@@ -99,15 +99,34 @@ for key in $SESSION_KEYS; do
     esac
 done
 
+# ── RPi3B+ Child Health Check ────────────────────────────────────────────────
+RPI3B_OK=true
+RPI3B_ALERTS=()
+RPI3B_HEALTH_OUT=""
+if [ -x "$RPI3B_HEALTH_SCRIPT" ]; then
+    RPI3B_HEALTH_OUT=$("$RPI3B_HEALTH_SCRIPT" 2>&1) || true
+    if echo "$RPI3B_HEALTH_OUT" | grep -q "RPI3B_HEALTH_CRITICAL"; then
+        RPI3B_OK=false
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            RPI3B_ALERTS+=("$line")
+        done <<< "$RPI3B_HEALTH_OUT"
+        log "🚨 RPI3B+ HEALTH: issues detected"
+        for a in "${RPI3B_ALERTS[@]}"; do
+            log "   • $a"
+        done
+    fi
+fi
+
 # ── Log patrol results ────────────────────────────────────────────────────────
 mkdir -p "$(dirname "$PATROL_LOG")"
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 if [ ${#ALERTS[@]} -gt 0 ]; then
     ALERTS_JSON=$(printf '"%s",' "${ALERTS[@]}" | sed 's/,$//')
-    PATROL_ENTRY="{\"timestamp\":\"$TIMESTAMP\",\"stuck\":$STUCK_COUNT,\"zombies\":$ZOMBIE_COUNT,\"alerts\":[$ALERTS_JSON]}"
+    PATROL_ENTRY="{\"timestamp\":\"$TIMESTAMP\",\"stuck\":$STUCK_COUNT,\"zombies\":$ZOMBIE_COUNT,\"rpi3b_ok\":$RPI3B_OK,\"alerts\":[$ALERTS_JSON]}"
 else
-    PATROL_ENTRY="{\"timestamp\":\"$TIMESTAMP\",\"stuck\":$STUCK_COUNT,\"zombies\":$ZOMBIE_COUNT,\"alerts\":[]}"
+    PATROL_ENTRY="{\"timestamp\":\"$TIMESTAMP\",\"stuck\":$STUCK_COUNT,\"zombies\":$ZOMBIE_COUNT,\"rpi3b_ok\":$RPI3B_OK,\"alerts\":[]}"
 fi
 
 if [ -f "$PATROL_LOG" ]; then
@@ -118,10 +137,9 @@ else
     echo "[$PATROL_ENTRY]" > "$PATROL_LOG"
 fi
 
-# ── Alert via agentmail if critical ──────────────────────────────────────────
 if [ "$ALERT_MODE" = "true" ] && [ "$ZOMBIE_COUNT" -gt 0 ]; then
     log "📧 Sending patrol alert..."
-    # Agentmail alert would go here — requires Mkra's agentmail inbox
+    # Agentmail alert would go here — requires User's agentmail inbox
     # For now, log that we would alert
     log "   → Would alert: $ZOMBIE_COUNT zombies found"
 fi
@@ -134,14 +152,20 @@ echo "════════════════════════�
 echo "  Timestamp:  $TIMESTAMP"
 echo "  Stuck:       $STUCK_COUNT (${STUCK_THRESHOLD_MIN}-${ZOMBIE_THRESHOLD_MIN} min inactive)"
 echo "  Zombies:     $ZOMBIE_COUNT (>${ZOMBIE_THRESHOLD_MIN} min inactive)"
+echo "  RPi3B+:       $([ "$RPI3B_OK" = true ] && echo OK || echo '⚠️ ISSUES')"
 echo "  Kill mode:   $KILL_MODE"
 echo "  Alert mode:  $ALERT_MODE"
-if [ ${#ALERTS[@]} -gt 0 ]; then
+if [ ${#ALERTS[@]} -gt 0 ] || [ "$RPI3B_OK" = false ]; then
     echo ""
     echo "  Alerts:"
     for a in "${ALERTS[@]}"; do
         echo "    • $a"
     done
+    if [ "$RPI3B_OK" = false ]; then
+        for a in "${RPI3B_ALERTS[@]}"; do
+            echo "    🔧 $a"
+        done
+    fi
 fi
 echo "═══════════════════════════════════════"
 echo "  Patrol log: $PATROL_LOG"

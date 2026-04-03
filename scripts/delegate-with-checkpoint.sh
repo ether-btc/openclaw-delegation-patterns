@@ -31,6 +31,7 @@
 #   1  = pre-delegation checklist failed (blocking)
 #   2  = compactness scored HIGH (blocking)
 #   3  = missing prerequisites
+#   4  = timeout escalation exhausted (blocking — do not respawn)
 
 set -euo pipefail
 
@@ -108,6 +109,54 @@ if [[ ! -d "$PROJECT_DIR" ]]; then
     echo "ERROR: Project directory missing: $PROJECT_DIR" >&2
     echo "Create it first, or check the project name." >&2
     exit 3
+fi
+
+# ─── STEP 0b: Check timeout escalation status (BLOCKING — NO BYPASS) ───────────
+# If orchestrator_takeover flag is set, the orchestrator must complete the task directly.
+# Exit 4 signals this. No further subagent delegation on this project.
+#
+# F-02 FIX: Block second spawn if retry_count >= 1 and task is script-build.
+# Enforces "2x retry then orchestrator takes over" rule from Phase C finding.
+
+CHECKPOINT_FILE="$CWD/checkpoint.json"
+if [[ -f "$CHECKPOINT_FILE" ]]; then
+    RETRY_COUNT=$(jq -r '.timeout.retry_count // 0' "$CHECKPOINT_FILE" 2>/dev/null || echo "0")
+    ESCALATION=$(jq -r '.timeout.escalation // "RETRY"' "$CHECKPOINT_FILE" 2>/dev/null || echo "RETRY")
+    TAKEOVER=$(jq -r '.orchestrator_takeover // false' "$CHECKPOINT_FILE" 2>/dev/null || echo "false")
+    TASK_TYPE="$(jq -r '.task_type // "unknown"' "$CHECKPOINT_FILE" 2>/dev/null || echo "unknown")"
+
+    # F-02: Block second spawn for script-build tasks
+    if [[ "$TASK_TYPE" == "script-build" && "$RETRY_COUNT" -ge 1 ]]; then
+        echo ""
+        echo "═══════════════════════════════════════════════" >&2
+        echo "SCRIPT-BUILD TIMEOUT — blocking second spawn" >&2
+        echo "═══════════════════════════════════════════════" >&2
+        echo "  Project:      $PROJECT" >&2
+        echo "  Task type:    script-build" >&2
+        echo "  retry_count:  $RETRY_COUNT (max 1 allowed)" >&2
+        echo "" >&2
+        echo "Per F-02: Script-build tasks get ONE retry max." >&2
+        echo "Orchestrator must complete this task directly." >&2
+        echo "═══════════════════════════════════════════════" >&2
+        exit 4
+    fi
+
+    if [[ "$TAKEOVER" == "true" || "$ESCALATION" == "ORCHESTRATOR_TAKEOVER" || "$ESCALATION" == "EXHAUSTED" || "$RETRY_COUNT" -ge 2 ]]; then
+        echo ""
+        echo "═══════════════════════════════════════════════" >&2
+        echo "TIMEOUT ESCALATION EXHAUSTED — blocking spawn" >&2
+        echo "═══════════════════════════════════════════════" >&2
+        echo "  Project:          $PROJECT" >&2
+        echo "  retry_count:      $RETRY_COUNT" >&2
+        echo "  escalation:        $ESCALATION" >&2
+        echo "  orchestrator_takeover: $TAKEOVER" >&2
+        echo "" >&2
+        echo "The orchestrator must COMPLETE this task directly." >&2
+        echo "Do NOT delegate again. Do it yourself." >&2
+        echo "After completion: run timeout-recovery.sh --reset to clear state." >&2
+        echo "═══════════════════════════════════════════════" >&2
+        exit 4
+    fi
 fi
 
 # ─── STEP 1: RUN pre-delegation checklist (BLOCKING — NO BYPASS) ──────────────

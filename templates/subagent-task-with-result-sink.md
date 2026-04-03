@@ -61,6 +61,13 @@ Do NOT write to any other path in `~/.openclaw/workspace/`
 
 ---
 
+## Phase Headers
+
+For multi-phase work, use headers from `memory/templates/project-phase-headers.md`:
+- Short updates → `─── Phase {N} ───`
+- Milestones → `───────────◆───────────  PHASE {N}: {TITLE}  ───────────◆───────────`
+- Lightweight markers → `· · · Phase {N} · · ·`
+
 ## Progress Updates
 
 Update the orchestrator every ~2 minutes with:

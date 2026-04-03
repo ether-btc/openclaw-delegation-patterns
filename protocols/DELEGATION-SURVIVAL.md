@@ -65,7 +65,7 @@ Please:
 2. Report what you were trying to do
 3. Use a MORE SPECIFIC exec command — narrow down what you're searching for
 
-Example fix: Instead of `find ~ -name "*.ts"`, use `find ~/.openclaw/extensions -name "*.ts" 2>/dev/null`
+Example fix: Instead of `find /home/pi -name "*.ts"`, use `find ~/agent-path -name "*.ts" 2>/dev/null`
 
 Continue working after reporting.
 EOF

@@ -55,6 +55,13 @@ bash $WORKSPACE/scripts/subagent-result-sink.sh \
 
 ---
 
+## Phase Headers
+
+For multi-phase work, use headers from `memory/templates/project-phase-headers.md`:
+- Short updates → `─── Phase {N} ───`
+- Milestones → `───────────◆───────────  PHASE {N}: {TITLE}  ───────────◆───────────`
+- Lightweight markers → `· · · Phase {N} · · ·`
+
 ## Output Format
 
 Report everything in your response so the orchestrator can write it to disk:

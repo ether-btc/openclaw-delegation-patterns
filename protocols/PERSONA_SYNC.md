@@ -22,12 +22,11 @@ These are the ONLY valid model identifiers across all protocols and personas:
 
 | Role | Persona File | Model | Use When |
 |------|-------------|-------|----------|
-| Coding | `memory/personas/qwen3-coder.md` | qwen3-coder | Code generation ONLY (never reviews) |
-| Strategic Analyst | `memory/personas/strategic-analyzer.md` | GLM51 | Code review, architecture, synthesis |
-| Deep Research | `memory/personas/kimik2thinking.md` | kimik2thinking | Multi-file analysis, Staff Engineer reviews |
-| Fast Reasoning | `memory/personas/deepseek32.md` | deepseek32 | Quick analysis, parallel sweeps |
-| General Analysis | `memory/personas/premium-mind.md` | qwen35 | Document review, summaries |
-| High-Speed Fallback | — | `minimax/MiniMax-M2.7` | Automatic fallback when primary exhausted |
+| Coding | `../personas/qwen3-coder.md` | qwen3-coder | Code generation ONLY (never reviews) |
+| Strategic Analyst | `../personas/strategic-analyzer.md` | GLM51 | Code review, architecture, synthesis |
+| Deep Research | `../personas/kimik2thinking.md` | kimik2thinking | Multi-file analysis, Staff Engineer reviews |
+| Fast Reasoning | `../personas/deepseek32.md` | deepseek32 | Quick analysis, parallel sweeps |
+| General Analysis | `../personas/premium-mind.md` | qwen35 | Document review, summaries |
 
 ---
 

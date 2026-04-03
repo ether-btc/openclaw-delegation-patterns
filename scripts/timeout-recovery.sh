@@ -1,330 +1,279 @@
 #!/bin/bash
 #
 # timeout-recovery.sh
+# ====================
+# Handles timeout escalation: retry at 2x → orchestrator takeover → exhausted
+# Uses atomic flock operations on checkpoint to prevent race conditions.
 #
-# Handles timeout recovery: checkpoint, kill, restore, respawn
+# Escalation states:
+#   retry_count == 0 → FIRST TIMEOUT  → retry at 2x (max 480s) → exit 0
+#   retry_count == 1 → SECOND TIMEOUT → orchestrator takes over  → exit 2
+#   retry_count >= 2 → EXHAUSTED      → orchestrator completes   → exit 3
+#
+# Exit codes:
+#   0 = retry spawned successfully
+#   2 = ORCHESTRATOR TAKEOVER (second timeout — orchestrator must act)
+#   3 = ESCALATION EXHAUSTED (orchestrator must complete directly)
 #
 # Usage:
-#   ./scripts/timeout-recovery.sh \
+#   timeout-recovery.sh \
 #     --project PROJECT \
 #     --session-id SESSION_ID \
 #     --checkpoint CHECKPOINT_FILE \
-#     --agent-id AGENT_ID \
-#     [options]
+#     [--timeout SECONDS]
 #
-# Options:
-#   --timeout SECONDS         New timeout (default: use original)
-#   --verbose                 Enable verbose logging
+# Reset (call after successful subagent completion):
+#   timeout-recovery.sh --project PROJECT --checkpoint C --reset
 
 set -euo pipefail
 
-# Default values
+# ─── Constants ────────────────────────────────────────────────────────────────
+MAX_TIMEOUT=480   # per DELEGATION_CORE.md — absolute max for any subagent task
+LOCK_WAIT=5       # seconds to wait for checkpoint lock
+
+# ─── Arguments ────────────────────────────────────────────────────────────────
+
 PROJECT=""
 SESSION_ID=""
 CHECKPOINT_FILE=""
-AGENT_ID=""
 TIMEOUT=""
-VERBOSE=false
+RESET=false
 
-# Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --project)
-            PROJECT="$2"
-            shift 2
-            ;;
-        --session-id)
-            SESSION_ID="$2"
-            shift 2
-            ;;
-        --checkpoint)
-            CHECKPOINT_FILE="$2"
-            shift 2
-            ;;
-        --agent-id)
-            AGENT_ID="$2"
-            shift 2
-            ;;
-        --timeout)
-            TIMEOUT="$2"
-            shift 2
-            ;;
-        --verbose)
-            VERBOSE=true
-            shift
-            ;;
-        *)
-            echo "Unknown option: $1"
-            exit 1
-            ;;
+        --project)     PROJECT="$2";        shift 2 ;;
+        --session-id) SESSION_ID="$2";      shift 2 ;;
+        --checkpoint) CHECKPOINT_FILE="$2"; shift 2 ;;
+        --timeout)    TIMEOUT="$2";         shift 2 ;;
+        --reset)      RESET=true;           shift   ;;
+        *)            echo "Unknown: $1";   exit 1  ;;
     esac
 done
 
-# Validate required arguments
-if [[ -z "$PROJECT" || -z "$SESSION_ID" || -z "$CHECKPOINT_FILE" ]]; then
-    echo "Usage: $0 --project PROJECT --session-id SESSION_ID --checkpoint CHECKPOINT_FILE [--agent-id AGENT_ID] [--timeout SECONDS]"
+# ─── Logging ──────────────────────────────────────────────────────────────────
+
+log_json() {
+    # Structured JSON log — always write to stderr (stdout is for session ID)
+    local level="$1"; shift
+    local msg="$*"
+    echo "{\"ts\":\"$(date -Iseconds)\",\"project\":\"$PROJECT\",\"level\":\"$level\",\"msg\":$(jq -n --arg m "$msg" '$m')}" >&2
+}
+
+log() { log_json "INFO" "$@"; }
+log_warn() { log_json "WARN" "$@"; }
+log_error() { log_json "ERROR" "$@"; }
+
+# ─── Validate ─────────────────────────────────────────────────────────────────
+
+if [[ -z "$PROJECT" || -z "$CHECKPOINT_FILE" ]]; then
+    echo "Usage: $0 --project P --checkpoint C [--session-id S] [--timeout N] [--reset]" >&2
     exit 1
 fi
 
-# Paths
 WORKSPACE="$HOME/.openclaw/workspace"
 PROJECT_DIR="$WORKSPACE/memory/projects/$PROJECT"
 PROGRESS_FILE="$PROJECT_DIR/progress.md"
 
-# Logging
-log() {
-    local level="$1"
-    shift
-    local message="$*"
-    local timestamp
-    timestamp=$(date -Iseconds)
-    echo "[$timestamp] [$level] $message"
-}
+# ─── Reset ───────────────────────────────────────────────────────────────────
+# Call with --reset after successful completion or explicit abort.
+# Clears retry_count so future tasks are not blocked.
 
-log_debug() {
-    [[ "$VERBOSE" == "true" ]] && log "DEBUG" "$@"
-}
+if [[ "$RESET" == "true" ]]; then
+    RESET_BEFORE="unknown"
+    (
+        flock -x -w "$LOCK_WAIT" 200 || { echo "LOCK_FAILED" >&2; exit 1; }
+        if [[ -f "$CHECKPOINT_FILE" ]]; then
+            RESET_BEFORE=$(jq -r '.timeout.retry_count // -1' "$CHECKPOINT_FILE")
+            jq '.timeout.retry_count = 0 | .timeout.escalation = "RETRY" | .timeout.triggered = false | .orchestrator_takeover = false' \
+                "$CHECKPOINT_FILE" > "${CHECKPOINT_FILE}.tmp" && mv "${CHECKPOINT_FILE}.tmp" "$CHECKPOINT_FILE"
+        fi
+    ) 200>>"$CHECKPOINT_FILE"
+    echo "{\"ts\":\"$(date -Iseconds)\",\"project\":\"$PROJECT\",\"level\":\"INFO\",\"msg\":\"Reset timeout.retry_count: $RESET_BEFORE → 0\"}" >&2
+    exit 0
+fi
 
-log_info() {
-    log "INFO" "$@"
-}
+# ─── Main escalation path ──────────────────────────────────────────────────────
 
-log_warn() {
-    log "WARN" "$@"
-}
+if [[ -z "$SESSION_ID" ]]; then
+    echo "Usage: --session-id required for escalation" >&2
+    exit 1
+fi
 
-log_error() {
-    log "ERROR" "$@"
-}
+# Atomic read → enforce → write
+escalation_result=$(
+    (
+        flock -x -w "$LOCK_WAIT" 200 || { echo "LOCK_FAILED"; exit 0; }
 
-# Step 1: Update checkpoint with recovery info
-update_checkpoint_recovery() {
-    log_info "Step 1: Updating checkpoint with recovery info"
+        # ── Read checkpoint ──────────────────────────────────────────────────
+        if [[ ! -f "$CHECKPOINT_FILE" ]]; then
+            log_warn "Checkpoint missing: $CHECKPOINT_FILE — treating as retry_count=0"
+            echo "RETRY_COUNT=0"
+            echo "ESCALATION=RETRY"
+            echo "ORIGINAL_TIMEOUT=300"
+            echo "ACTION=RETRY"
+            exit 0
+        fi
 
-    local recovery_timestamp
-    recovery_timestamp=$(date -Iseconds)
+        # Backward compat: migrate legacy recovery.retry_count if needed
+        if ! jq -e '.timeout.retry_count' "$CHECKPOINT_FILE" > /dev/null 2>&1; then
+            legacy_migration=$(jq -r '.recovery.retry_count // 0' "$CHECKPOINT_FILE")
+            jq ".timeout //= {} | .timeout.retry_count = $legacy_migration | .timeout.escalation = \"RETRY\"" \
+                "$CHECKPOINT_FILE" > "${CHECKPOINT_FILE}.tmp" && mv "${CHECKPOINT_FILE}.tmp" "$CHECKPOINT_FILE"
+            log_warn "Migrated legacy retry_count=$legacy_migration to timeout.retry_count"
+        fi
 
-    # Update checkpoint
-    jq --arg rt "$recovery_timestamp" \
-        '.timeout_triggered = true | .recovery_triggered_at = $rt | .recovery_status = "in_progress"' \
-        "$CHECKPOINT_FILE" > "${CHECKPOINT_FILE}.tmp"
-    mv "${CHECKPOINT_FILE}.tmp" "$CHECKPOINT_FILE"
+        RETRY_COUNT=$(jq -r '.timeout.retry_count // 0' "$CHECKPOINT_FILE")
+        ORIGINAL_TIMEOUT=$(jq -r '.timeout.original_timeout_seconds // 0' "$CHECKPOINT_FILE")
+        ESCALATION=$(jq -r '.timeout.escalation // "RETRY"' "$CHECKPOINT_FILE")
 
-    log_debug "Checkpoint updated: recovery_triggered_at=$recovery_timestamp"
-}
+        echo "RETRY_COUNT=$RETRY_COUNT"
+        echo "ESCALATION=$ESCALATION"
+        echo "ORIGINAL_TIMEOUT=$ORIGINAL_TIMEOUT"
 
-# Step 2: Kill the subagent
-kill_subagent() {
-    log_info "Step 2: Killing subagent $SESSION_ID"
+        # ── Enforce escalation tier ─────────────────────────────────────────
 
-    if subagents kill "$SESSION_ID" 2>&1; then
-        log_info "Subagent $SESSION_ID killed successfully"
-    else
-        log_warn "Failed to kill subagent $SESSION_ID (may have already timed out)"
-    fi
-}
+        if [[ "$RETRY_COUNT" -ge 2 || "$ESCALATION" == "EXHAUSTED" ]]; then
+            # Tier 3: Exhausted
+            jq '.timeout.escalation = "EXHAUSTED" | .timeout.retry_count += 1' \
+                "$CHECKPOINT_FILE" > "${CHECKPOINT_FILE}.tmp" && mv "${CHECKPOINT_FILE}.tmp" "$CHECKPOINT_FILE"
+            log_error "ESCALATION EXHAUSTED — retry_count=$RETRY_COUNT — orchestrator must complete"
+            echo "ACTION=EXHAUSTED"
+            exit 0
+        fi
 
-# Step 3: Update progress.md
-update_progress() {
-    log_info "Step 3: Updating progress.md"
+        if [[ "$RETRY_COUNT" -eq 1 || "$ESCALATION" == "ORCHESTRATOR_TAKEOVER" ]]; then
+            # Tier 2: Second timeout — orchestrator takeover
+            # Write durable ORCHESTRATOR_TAKEOVER flag BEFORE exiting
+            jq '.timeout.escalation = "ORCHESTRATOR_TAKEOVER" | .timeout.retry_count = 2 | .orchestrator_takeover = true' \
+                "$CHECKPOINT_FILE" > "${CHECKPOINT_FILE}.tmp" && mv "${CHECKPOINT_FILE}.tmp" "$CHECKPOINT_FILE"
+            log_warn "SECOND TIMEOUT — ORCHESTRATOR_TAKEOVER written to checkpoint — exiting 2"
+            echo "ACTION=ORCHESTRATOR_TAKEOVER"
+            exit 0
+        fi
 
-    local recovery_timestamp
-    recovery_timestamp=$(date -Iseconds)
+        # Tier 1: First timeout — retry at 2x
+        CURRENT_TIMEOUT="${TIMEOUT:-$ORIGINAL_TIMEOUT}"
+        if [[ "$CURRENT_TIMEOUT" -eq 0 ]]; then
+            CURRENT_TIMEOUT=300
+        fi
 
-    # Update progress.md with recovery status
-    cat > "$PROGRESS_FILE" << EOF
-# Task: $(jq -r '.task' "$CHECKPOINT_FILE" 2>/dev/null || echo "Unknown")
+        # Preserve original timeout for potential future resets
+        if [[ "$ORIGINAL_TIMEOUT" -eq 0 ]]; then
+            ORIGINAL_TIMEOUT=$CURRENT_TIMEOUT
+        fi
 
-## Status
-- State: RECOVERING
-- Updated: $recovery_timestamp
-- Version: 2
+        NEW_TIMEOUT=$((CURRENT_TIMEOUT * 2))
+        [[ "$NEW_TIMEOUT" -gt $MAX_TIMEOUT ]] && NEW_TIMEOUT=$MAX_TIMEOUT
 
-## Progress
-- Phase: "Timeout Recovery"
-- Completed: $(jq -r '.progress.percent // 0' "$CHECKPOINT_FILE" 2>/dev/null)
-- Total: 100
-- Percent: $(jq -r '.progress.percent // 0' "$CHECKPOINT_FILE" 2>/dev/null)%
+        jq --arg new_t "$NEW_TIMEOUT" --arg orig_t "$ORIGINAL_TIMEOUT" \
+            '.timeout.escalation = "RETRY" | .timeout.retry_count = 1 |
+             .timeout.original_timeout_seconds = (if (.timeout.original_timeout_seconds | tonumber) == 0 then ($orig_t | tonumber) else .timeout.original_timeout_seconds end) |
+             .timeout.time_remaining_seconds = ($new_t | tonumber) | .timeout.triggered = true' \
+            "$CHECKPOINT_FILE" > "${CHECKPOINT_FILE}.tmp" && mv "${CHECKPOINT_FILE}.tmp" "$CHECKPOINT_FILE"
 
-## Recovery
-- Triggered: $recovery_timestamp
-- Original Session: $SESSION_ID
-- Recovering from checkpoint: $CHECKPOINT_FILE
-- Progress at checkpoint: $(jq -r '.progress.phase // "Unknown"' "$CHECKPOINT_FILE" 2>/dev/null)
+        log "FIRST TIMEOUT — retry_count=0→1, timeout ${CURRENT_TIMEOUT}s → ${NEW_TIMEOUT}s (2x, max 480s)"
+        echo "NEW_TIMEOUT=$NEW_TIMEOUT"
+        echo "ACTION=RETRY"
+        exit 0
 
-## Last Activity
-- Time: $recovery_timestamp
-- Step: "Recovery - Killing old session, preparing to restore"
-- Details: "Timeout recovery triggered, checkpoint updated, old session killed"
-
-## Files Created
-$(jq -r '.context.files_created // [] | join("\n")' "$CHECKPOINT_FILE" 2>/dev/null)
-
-## Files Modified
-$(jq -r '.context.files_modified // [] | join("\n")' "$CHECKPOINT_FILE" 2>/dev/null)
-
-## Checkpoint Info
-- Created: $(jq -r '.created_at' "$CHECKPOINT_FILE" 2>/dev/null)
-- Subagent Session ID: $(jq -r '.subagent_session_id' "$CHECKPOINT_FILE" 2>/dev/null)
-- Phase: $(jq -r '.progress.phase' "$CHECKPOINT_FILE" 2>/dev/null)
-- Step: $(jq -r '.progress.step' "$CHECKPOINT_FILE" 2>/dev/null)
-EOF
-
-    log_debug "Progress updated with recovery status"
-}
-
-# Step 4: Spawn new subagent with recovery context
-spawn_recovered_subagent() {
-    log_info "Step 4: Spawning recovered subagent"
-
-    # Get agent ID from checkpoint if not provided
-    if [[ -z "$AGENT_ID" ]]; then
-        AGENT_ID=$(jq -r '.agent_id // "kimik2thinking"' "$CHECKPOINT_FILE" 2>/dev/null)
-        log_debug "Using agent ID from checkpoint: $AGENT_ID"
-    fi
-
-    # Get timeout from checkpoint if not provided
-    if [[ -z "$TIMEOUT" ]]; then
-        TIMEOUT=$(jq -r '.timeout_seconds // 300' "$CHECKPOINT_FILE" 2>/dev/null)
-        log_debug "Using timeout from checkpoint: ${TIMEOUT}s"
-    fi
-
-    # Prepare recovery task
-    local recovery_task
-    recovery_task=$(cat << 'EOF'
-# Recovery Task: Resume from Checkpoint
-
-You are recovering from a checkpoint. Follow these steps:
-
-1. **Read checkpoint.json:**
-   ```bash
-   cat checkpoint.json | jq '.'
-   ```
-
-2. **Restore state:**
-   - Set current phase from `checkpoint.progress.phase`
-   - Set current step from `checkpoint.progress.step`
-   - Continue from `checkpoint.progress.percent`% complete
-
-3. **Update progress.md:**
-   ```markdown
-   ## Status
-   - State: RUNNING (RECOVERED)
-   - Updated: ISO8601 timestamp
-
-   ## Recovery
-   - Restored from: checkpoint.json
-   - Original Session: [SESSION_ID]
-   - Resuming at: Phase [phase], Step [step], [percent]% complete
-   ```
-
-4. **Continue task:**
-   - Resume from where you left off
-   - Update progress every 2 minutes
-   - Complete the task
-
-**Important:**
-- Progress updates every 2 minutes (MANDATORY)
-- Checkpoint signal handling (if signaled again)
-- Complete the original task
-EOF
+    ) 200>>"$CHECKPOINT_FILE"
 )
 
-    # Spawn new subagent
-    log_info "Spawning subagent: $AGENT_ID with timeout ${TIMEOUT}s"
+# Parse escalation result
+eval "$escalation_result"
 
-    local session_output
-    session_output=$(sessions_spawn \
-        agentId:"$AGENT_ID" \
-        --task "$recovery_task" \
-        --cwd "$PROJECT_DIR" \
-        --timeout "$TIMEOUT" \
-        --cleanup delete \
-        2>&1)
+# ─── Route on action ──────────────────────────────────────────────────────────
 
-    # Extract new session ID
-    local new_session_id
-    new_session_id=$(echo "$session_output" | grep -oP '(?<=sessionId["\s:]+)[a-f0-9-]+' || echo "")
-
-    if [[ -z "$new_session_id" ]]; then
-        log_warn "Could not extract new session ID from output"
-        new_session_id="unknown"
-    fi
-
-    log_info "New subagent spawned: $new_session_id"
-
-    # Update checkpoint with new session ID
-    jq --arg sid "$new_session_id" \
-        '.recovery_session_id = $sid | .recovery_status = "completed"' \
-        "$CHECKPOINT_FILE" > "${CHECKPOINT_FILE}.tmp"
-    mv "${CHECKPOINT_FILE}.tmp" "$CHECKPOINT_FILE"
-
-    log_debug "Checkpoint updated with new session ID: $new_session_id"
-
-    echo "$new_session_id"
-}
-
-# Main recovery flow
-main() {
-    log_info "========================================"
-    log_info "TIMEOUT RECOVERY STARTED"
-    log_info "========================================"
-    log_info "Project: $PROJECT"
-    log_info "Session: $SESSION_ID"
-    log_info "Checkpoint: $CHECKPOINT_FILE"
-    log_info "Agent: $AGENT_ID"
-    log_info "========================================"
-
-    # Step 1: Update checkpoint
-    update_checkpoint_recovery
-
-    # Step 2: Kill subagent
-    kill_subagent
-
-    # Step 3: Update progress
-    update_progress
-
-    # Step 4: Spawn recovered subagent
-    local new_session_id
-    new_session_id=$(spawn_recovered_subagent)
-
-    log_info "========================================"
-    log_info "TIMEOUT RECOVERY COMPLETE"
-    log_info "========================================"
-    log_info "Original session: $SESSION_ID"
-    log_info "New session: $new_session_id"
-    log_info "Checkpoint: $CHECKPOINT_FILE"
-    log_info "========================================"
-
-    # Step 5: Verify expected output files
-    log_info "Step 5: Checking expected output files from checkpoint"
-    local expected_files
-    expected_files=$(jq -r '.context.files_created // [] | join("\n")' "$CHECKPOINT_FILE" 2>/dev/null || echo "")
-    if [ -z "$expected_files" ]; then
-        log_info "(No files recorded in checkpoint — skipping verification)"
-    else
-        local missing=0
-        while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            if [ -f "$file" ]; then
-                log_pass "✓ Found: $file"
-            else
-                log_warn "✗ Missing: $file (respawned subagent should create this)"
-                ((missing++)) || true
-            fi
-        done <<< "$expected_files"
-        if [ $missing -gt 0 ]; then
-            log_warn "$missing output file(s) not yet created — run verify-subagent-progress.sh after recovery completes"
-        else
-            log_pass "✓ All expected output files present"
+case "$ACTION" in
+    LOCK_FAILED)
+        log_error "Could not acquire checkpoint lock — giving up"
+        exit 3
+        ;;
+    EXHAUSTED)
+        log_json "INFO" "{\"action\":\"exhausted\",\"retry_count\":$RETRY_COUNT}"
+        exit 3
+        ;;
+    ORCHESTRATOR_TAKEOVER)
+        log_json "INFO" "{\"action\":\"orchestrator_takeover\",\"checkpoint\":\"$CHECKPOINT_FILE\"}"
+        exit 2
+        ;;
+    RETRY)
+        if [[ -z "${NEW_TIMEOUT:-}" ]]; then
+            log_error "RETRY action but NEW_TIMEOUT not set"
+            exit 3
         fi
-    fi
+        ;;
+esac
 
-    log_info "Run verify-subagent-progress.sh --project $PROJECT after recovery completes"
+# ─── Kill subagent ─────────────────────────────────────────────────────────────
 
-    # Return new session ID
-    echo "$new_session_id"
-}
+log "Killing subagent $SESSION_ID..."
+subagents kill "$SESSION_ID" 2>/dev/null || log_warn "Subagent $SESSION_ID already gone"
 
-# Run main
-main
+# ─── Update progress ─────────────────────────────────────────────────────────
+
+mkdir -p "$PROJECT_DIR"
+cat > "$PROGRESS_FILE" << EOF
+# Task: $(jq -r '.task' "$CHECKPOINT_FILE" 2>/dev/null || echo "Unknown")
+## Status
+- State: RETRY_PENDING
+- Updated: $(date -Iseconds)
+- retry_count: 1
+- New timeout: ${NEW_TIMEOUT}s
+- Escalation: RETRY (2x)
+## Recovery
+- Original session: $SESSION_ID
+- Retrying at ${NEW_TIMEOUT}s (2x)
+EOF
+
+# ─── Spawn recovery subagent ────────────────────────────────────────────────
+
+AGENT_ID=$(jq -r '.agent_id // "kimik2thinking"' "$CHECKPOINT_FILE" 2>/dev/null || echo "kimik2thinking")
+log "Spawning recovery subagent: $AGENT_ID timeout ${NEW_TIMEOUT}s..."
+
+RECOVERY_TASK="## Recovery Task: Resume from Checkpoint
+
+Project: $PROJECT
+Checkpoint: $CHECKPOINT_FILE
+Timeout: ${NEW_TIMEOUT}s (2x from original)
+
+**Rules:**
+1. \`cat $CHECKPOINT_FILE | jq '.'\` — read state
+2. Resume from progress.phase / progress.step / progress.percent
+3. Update progress.md every 2 minutes (MANDATORY)
+4. Write outputs to: $PROJECT_DIR/
+5. Say COMPLETE when done
+
+**Checkpoint state:**
+- phase: \$(jq -r '.progress.phase' '$CHECKPOINT_FILE')
+- step: \$(jq -r '.progress.step' '$CHECKPOINT_FILE')
+- percent: \$(jq -r '.progress.percent' '$CHECKPOINT_FILE')
+
+**⚠️ This is a timeout retry. Resume from checkpoint — do not restart.**"
+
+SESSION_OUTPUT=$(sessions_spawn \
+    agentId:"$AGENT_ID" \
+    --task "$RECOVERY_TASK" \
+    --cwd "$PROJECT_DIR" \
+    --timeout "$NEW_TIMEOUT" \
+    --cleanup delete \
+    2>&1)
+
+NEW_SESSION_ID=$(echo "$SESSION_OUTPUT" | grep -oP '(?<=sessionId["\s:]+)[a-f0-9-]+' || echo "")
+
+if [[ -z "$NEW_SESSION_ID" ]]; then
+    log_error "Failed to extract new session ID"
+    exit 1
+fi
+
+# Atomic write of new session ID
+(
+    flock -x -w "$LOCK_WAIT" 200 || exit 1
+    jq --arg sid "$NEW_SESSION_ID" \
+        '.subagent_session_id = $sid | .timeout.retry_count = 1' \
+        "$CHECKPOINT_FILE" > "${CHECKPOINT_FILE}.tmp" && mv "${CHECKPOINT_FILE}.tmp" "$CHECKPOINT_FILE"
+) 200>>"$CHECKPOINT_FILE"
+
+log_json "INFO" "{\"action\":\"retry_spawned\",\"new_session\":\"$NEW_SESSION_ID\",\"timeout\":$NEW_TIMEOUT}"
+echo "$NEW_SESSION_ID"
+exit 0

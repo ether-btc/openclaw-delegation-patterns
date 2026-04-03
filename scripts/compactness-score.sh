@@ -72,7 +72,7 @@ fi
 count_grep() {
     local pattern="$1"
     local count
-    count=$(grep -cE "$pattern" "$TASK_FILE" 2>/dev/null) || count=0
+    count=$(grep -cE -- "$pattern" "$TASK_FILE" 2>/dev/null) || count=0
     count=${count:-0}
     echo "$count"
 }

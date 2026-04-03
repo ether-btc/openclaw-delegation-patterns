@@ -8,16 +8,19 @@
 
 ## Timeout Guidelines
 
-| Task Type | Default | Max |
-|-----------|---------|-----|
-| Quick (single tool call) | 30s | 60s |
-| Fact lookup / simple read | 60s | 120s |
-| Code (<50 lines) | 60s | 120s |
-| Code (50-200 lines) | 180s | 300s |
-| **Script build + test cycle** | **300s** | **480s** |
-| Code (>200 lines) → SPLIT | — | — |
-| Analysis / research | 180s | 300s |
-| Multi-phase project | Per phase | Per phase |
+| Task Type | Default | Max | Model Guidance |
+|-----------|---------|-----|----------------|
+| Quick (single tool call) | 30s | 60s | Any fast model |
+| Fact lookup / simple read | 60s | 120s | deepseek32, kimik25, minimax-hs |
+| Code (<50 lines) | 60s | 120s | qwen3-coder |
+| Code (50-200 lines) | 180s | 300s | qwen3-coder |
+| **Script build + test cycle** | **300s** | **480s** | qwen3-coder |
+| Code (>200 lines) → SPLIT | — | — | Use Minimax for large context |
+| Analysis / research | 180s | 300s | kimik2thinking, qwen35 |
+| Large context load | 300s | 480s | Minimax, GLM-5.1 |
+| Multimodal analysis | 180s | 300s | gemini-flite |
+| Fast burst (speed priority) | 60s | 120s | minimax-hs |
+| Architecture / design | 300s | 480s | kimik2thinking |
 
 **Rule:** If a task can be split, split it. Don't give one subagent more than 480s of work.
 
@@ -43,20 +46,75 @@
 
 ---
 
-## Error Classification
+## Pre-Handoff Briefing (Frozen Inference)
+
+**Problem:** Subagents suffer a blank-slate tax — spawning with zero context, spending tokens on reconnaissance before useful work begins.
+
+**Solution:** Orchestrator pre-digests context into a briefing doc. Subagent reads briefing → executes. No reconnaissance required.
+
+**Complex task scoring matrix:**
+| Factor | Formula | Notes |
+|--------|---------|-------|
+| File count | ×3 | Files touched by task |
+| Line count | ×0.5 | Total lines across files |
+| Cross-reference density | ×5 | Inter-file references (imports, calls, shared configs) |
+| Context dependency | ×4 | Requires understanding state beyond the files themselves |
+
+**Score = (files×3) + (lines×0.5) + (xrefs×5) + (context×4)**
+- **≥10** = complex task → briefing **required**
+- **<10** = simple task → briefing optional
+
+**Briefing template:** `memory/templates/subagent-briefing.md`
+
+**Mandatory before every complex subagent spawn:**
+1. Orchestrator writes briefing doc (use template)
+2. Orchestrator self-certifies all 3:
+   - Does briefing include explicit success criteria?
+   - Are scope boundaries explicitly defined (in/out)?
+   - Are file dependencies and cross-references mapped?
+3. If any answer is "no" → complete the briefing before spawning
+4. Attach briefing to spawn or write to `results/<project>/briefing.md`
+
+**Anti-pattern:** Subagent spawns on complex task (≥10) without briefing → orchestrator absorbs blank-slate tax, defeating the delegation optimization.
+
+---
 
 ### Category A: Recoverable → Retry
 - Timeout → retry with higher timeout (see escalation table below)
 - Rate limit → backoff 60s, retry
 - Partial success → complete manually, keep good parts
 
-**Timeout escalation table:**
-| If this happens | Do this |
-|-----------------|---------|
-| First timeout on a new task | Retry at 2x original timeout |
-| Second timeout on same task | Orchestrator takes over — write/test/fix directly |
-| Timeout during test-fix cycle | Orchestrator reads partial output from progress file, completes the cycle |
-| Timeout on a subagent that was writing a file | Check if file exists → if yes, test it; if no, rewrite |
+**Timeout escalation table (enforced by timeout-recovery.sh + delegate-with-checkpoint.sh):**
+| retry_count | escalation | Action | Exit code |
+|-------------|-----------|--------|-----------|
+| 0 | RETRY | First timeout → retry at 2x original (cap 480s) | 0 (spawn retry) |
+| 1 | ORCHESTRATOR_TAKEOVER | Second timeout → orchestrator completes directly | 2 |
+| ≥2 | EXHAUSTED | Orchestrator must finish without further delegation | 3 |
+
+**Checkpoint schema (checkpoint.json):**
+```json
+"timeout": {
+  "original_timeout_seconds": 300,  // base — never compounds on retry
+  "retry_count": 0,                 // 0=fresh, 1=first-retry, 2=takeover
+  "escalation": "RETRY",            // RETRY | ORCHESTRATOR_TAKEOVER | EXHAUSTED
+  "triggered": false
+},
+"orchestrator_takeover": false      // durable signal (written before exit 2)
+```
+Legacy `recovery.retry_count` auto-migrated to `timeout.retry_count` on first read.
+
+**Atomic ops:** All checkpoint R/W use `flock -x` (exclusive lock). Prevents race conditions.
+
+**Reset (required after any resolution event):**
+After task complete, orchestrator takeover, or user abort:
+```bash
+timeout-recovery.sh --project X --checkpoint /path/to/checkpoint.json --reset
+```
+This clears `retry_count → 0` — without it, all future delegations on that project BLOCK permanently.
+
+**Exit codes:**
+- `timeout-recovery.sh`: 0=retry spawned, 2=orchestrator takeover, 3=escalation exhausted
+- `delegate-with-checkpoint.sh`: 4=escalation exhausted, block spawn
 
 **Rule of thumb:** If a subagent times out twice on the same task, stop delegating it — complete it yourself. Repeated timeouts mean the task is too complex for the subagent's context window or the task definition needs simplification.
 
@@ -108,30 +166,46 @@
 
 **Rule: Only use models from `openclaw models list`. All fallback models must be confirmed available.**
 
-| Primary | Fallback |
-|---------|----------|
-| qwen3-coder | minimax/MiniMax-M2.7 |
-| kimik2thinking | deepseek32 |
-| deepseek32 | kimik2thinking |
-| Any unavailable | qwen3-coder |
+| Primary | Fallback 1 | Fallback 2 | Fallback 3 |
+|---------|-----------|-----------|-----------|
+| qwen3-coder | Minimax | GLM | kimik2thinking |
+| kimik2thinking | deepseek32 | qwq32b (last resort) | qwen35 |
+| deepseek32 | kimik25 | qwq32b (last resort) | qwen35 |
+| qwen35 | GLM-5.1 | Minimax | kimik2thinking |
+| gemini-flite | openrouter-free | — | — |
+| minimax-hs | kimik25 | deepseek32 | qwq32b (last resort) |
+| GLM-5.1 | Minimax | GLM | — |
+| Minimax | GLM | GLM-5.1 | — |
+| qwq32b | kimik2thinking | qwen35 | — |
+| openrouter-free | gemini-flite | — | — |
 
-**Available models on this system (from `openclaw models list`):**
-- `nvidia/moonshotai/kimi-k2.5` (kimik25)
-- `zai/glm-4.7` (GLM) — currently exhausted until ~2026-03-27 04:10
+**GLM-5.1 quota fallback:** On quota error → MiniMax-M2.7 (configured default)
+
+**Emergency fallback:** If all chains exhausted → MiniMax-M2.7
+
+**Available models on this system (openclaw models list, 2026-03-30):**
+- `zai/glm-5.1` (GLM51) — Primary orchestrator
+- `zai/glm-4.7` (GLM)
+- `minimax/MiniMax-M2.7` (Minimax)
+- `minimax/MiniMax-M2.7-highspeed` (minimax-hs)
 - `nvidia/moonshotai/kimi-k2-thinking` (kimik2thinking)
+- `nvidia/moonshotai/kimi-k2.5` (kimik25)
 - `nvidia/qwen/qwen3.5-397b-a17b` (qwen35)
 - `nvidia/qwen/qwen3-coder-480b-a35b-instruct` (qwen3-coder)
+- `nvidia/qwen/qwq-32b` (qwq32b) — last resort fallback only
 - `nvidia/deepseek-ai/deepseek-v3.2` (deepseek32)
-- `google/gemini-2.5-flash-lite`
-- `minimax/MiniMax-M2.7-highspeed`
-- `minimax/MiniMax-M2.7`
+- `google/gemini-2.5-flash-lite` (gemini-flite) — multimodal
+- `kilocode/openrouter/free` (openrouter-free) — multimodal fallback
+
+**Excluded (poor performance):** corethink, nemotron
 
 ---
 
 ## Key Rules for Orchestrator
 
-1. **Orchestrator writes.** Subagent produces → I write files. Never expect subagent to write to disk.
-2. **Template first.** Check PROJECT_REGISTRY → match task type → select template before spawning.
-3. **Progress file before spawn.** Always create progress file before `sessions_spawn`.
-4. **Chunk big tasks.** If >5 files or >500 lines, split into atomic sub-tasks.
-5. **Post-delegation verification is mandatory.** See ORCHESTRATOR_VERIFY.md after every subagent completion.
+1. **Orchestrator uses GLM-5.1** as primary (200k context). Fallback to Minimax or GLM.
+2. **Orchestrator writes.** Subagent produces → I write files. Never expect subagent to write to disk.
+3. **Template first.** Check PROJECT_REGISTRY → match task type → select template before spawning.
+4. **Progress file before spawn.** Always create progress file before `sessions_spawn`.
+5. **Chunk big tasks.** If >5 files or >500 lines, split into atomic sub-tasks.
+6. **Post-delegation verification is mandatory.** See ORCHESTRATOR_VERIFY.md after every subagent completion.
